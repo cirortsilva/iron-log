@@ -445,6 +445,39 @@
   }
   .set-delete:active { color: var(--red); }
 
+  .no-load-link {
+    color: var(--text-muted);
+    font-size: 9px;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    margin-left: 4px;
+    letter-spacing: 0;
+    font-family: var(--font-body);
+    text-transform: none;
+  }
+  .no-load-link:hover { color: var(--accent); }
+
+  .no-load-badge {
+    background: var(--surface3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    transition: border-color .15s;
+    letter-spacing: 1px;
+  }
+  .no-load-badge:active { border-color: var(--accent); }
+  .no-load-undo { font-size: 10px; color: #444; }
+
   .add-set-btn {
     margin-top: 10px;
     width: 100%;
@@ -1003,6 +1036,7 @@ function formatDate(isoStr) {
 let currentView = 'home';
 let currentTreino = null;
 let currentSessionData = {};
+let currentSessionDate = '';
 let historyFilter = 'ALL';
 let modalAction = null;
 
@@ -1047,7 +1081,7 @@ function renderHome() {
         <div class="today-label">Hoje — ${DAY_NAMES[dow]}</div>
         <div class="today-name">${t.name}</div>
         <div class="today-sub">${t.sub}</div>
-        <button class="today-btn" onclick="openTreino('${treinoKey}')">▶ INICIAR TREINO</button>
+        <button class="today-btn" onclick="openTreinoSelector()">▶ INICIAR TREINO</button>
       </div>`;
   }
 
@@ -1093,16 +1127,27 @@ function renderHome() {
 function openTreinoSelector() {
   const overlay = document.getElementById('selector-overlay');
   const btns = document.getElementById('treino-selector-btns');
-  btns.innerHTML = Object.entries(TREINOS).map(([key, t]) => `
-    <button onclick="openTreino('${key}');closeSelectorModal()" style="
-      background:var(--surface2);border:1px solid var(--border);
-      color:var(--text);padding:14px 16px;border-radius:12px;
-      font-family:var(--font-display);font-size:20px;letter-spacing:2px;
-      cursor:pointer;text-align:left;
-    ">
-      <span style="color:var(--accent)">${key}</span> — <span style="font-size:14px;font-family:var(--font-body);font-weight:500">${t.sub}</span>
-    </button>
-  `).join('');
+  const today = getTodayKey();
+  btns.innerHTML = `
+    <div style="margin-bottom:4px">
+      <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:1px;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px">📅 Data do treino</div>
+      <input type="date" id="selector-date" value="${today}" max="${today}"
+        style="width:100%;background:var(--surface2);border:1px solid var(--accent);color:var(--text);
+               padding:12px 14px;border-radius:10px;font-family:var(--font-mono);font-size:15px;
+               outline:none;-webkit-appearance:none;margin-bottom:12px">
+    </div>
+    <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:1px;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px">Selecione o treino</div>
+    ${Object.entries(TREINOS).map(([key, t]) => `
+      <button onclick="openTreino('${key}',document.getElementById('selector-date').value);closeSelectorModal()" style="
+        background:var(--surface2);border:1px solid var(--border);
+        color:var(--text);padding:14px 16px;border-radius:12px;
+        font-family:var(--font-display);font-size:20px;letter-spacing:2px;
+        cursor:pointer;text-align:left;
+      ">
+        <span style="color:var(--accent)">${key}</span> — <span style="font-size:14px;font-family:var(--font-body);font-weight:500">${t.sub}</span>
+      </button>
+    `).join('')}
+  `;
   overlay.classList.add('open');
 }
 
@@ -1110,9 +1155,10 @@ function closeSelectorModal() {
   document.getElementById('selector-overlay').classList.remove('open');
 }
 
-function openTreino(key) {
+function openTreino(key, date) {
   currentTreino = key;
   currentSessionData = {};
+  currentSessionDate = date || getTodayKey();
   renderTreinoView();
   switchView('treino');
   document.getElementById('nav-treino').classList.add('active');
@@ -1123,7 +1169,6 @@ function renderTreinoView() {
   if (!t) return;
 
   const db = getDB();
-  const today = getTodayKey();
 
   // Check last session for this treino (for previous records)
   const prevSessions = db.sessions.filter(s => s.treino === currentTreino);
@@ -1135,7 +1180,7 @@ function renderTreinoView() {
       <div class="prev-record">
         <span>🏆</span>
         <span class="prev-record-label">ÚLTIMA:</span>
-        <span>${prev.map(s => `${s.load}kg × ${s.reps}rep`).join(' · ')}</span>
+        <span>${prev.map(s => `${s.noLoad ? 'S/carga' : s.load+'kg'} × ${s.reps}rep`).join(' · ')}</span>
       </div>` : '';
 
     return `
@@ -1166,7 +1211,15 @@ function renderTreinoView() {
         <div class="treino-badge">${t.name}</div>
         <div class="treino-subtitle">${t.sub}</div>
       </div>
-      <div class="treino-date-badge">${formatDate(today)}<br><span style="color:var(--accent)">${today}</span></div>
+      <div class="treino-date-badge" onclick="document.getElementById('session-date-input').showPicker?document.getElementById('session-date-input').showPicker():document.getElementById('session-date-input').focus()" style="cursor:pointer;position:relative">
+        <div style="font-size:9px;color:var(--text-muted);font-family:var(--font-mono);letter-spacing:1px;margin-bottom:2px">📅 DATA</div>
+        <div id="session-date-display" style="color:var(--accent);font-family:var(--font-mono);font-size:13px;font-weight:500">${formatDate(currentSessionDate)}</div>
+        <input type="date" id="session-date-input"
+          value="${currentSessionDate}"
+          max="${getTodayKey()}"
+          onchange="updateSessionDate(this.value)"
+          style="position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%">
+      </div>
     </div>
     ${exercisesHTML}
     <button class="save-treino-btn" onclick="saveTreino()">💾 SALVAR TREINO</button>
@@ -1176,6 +1229,13 @@ function renderTreinoView() {
   t.exercises.forEach(ex => {
     currentSessionData[ex.id] = [];
   });
+}
+
+function updateSessionDate(val) {
+  if (!val) return;
+  currentSessionDate = val;
+  const disp = document.getElementById('session-date-display');
+  if (disp) disp.textContent = formatDate(val);
 }
 
 function toggleExercise(exId) {
@@ -1213,17 +1273,28 @@ function renderSets(exId) {
   const list = document.getElementById(`sets-list-${exId}`);
   const sets = currentSessionData[exId] || [];
 
-  list.innerHTML = sets.map((s, idx) => `
+  list.innerHTML = sets.map((s, idx) => {
+    const noLoad = !!s.noLoad;
+    const loadField = noLoad
+      ? `<div class="set-field">
+           <label>Carga (kg)</label>
+           <div class="no-load-badge" onclick="toggleNoLoad('${exId}',${idx})">
+             <span>S/ CARGA</span><span class="no-load-undo">✕</span>
+           </div>
+         </div>`
+      : `<div class="set-field">
+           <label>Carga (kg) <span class="no-load-link" onclick="toggleNoLoad('${exId}',${idx})">sem carga</span></label>
+           <input type="number" inputmode="decimal" placeholder="0"
+             value="${s.load}" min="0" step="0.5"
+             onchange="updateSet('${exId}',${idx},'load',this.value)"
+             oninput="updateSet('${exId}',${idx},'load',this.value)">
+         </div>`;
+
+    return `
     <div class="set-row" id="setrow-${exId}-${idx}">
       <div class="set-num">${idx + 1}</div>
       <div class="set-field-group">
-        <div class="set-field">
-          <label>Carga (kg)</label>
-          <input type="number" inputmode="decimal" placeholder="0"
-            value="${s.load}" min="0" step="0.5"
-            onchange="updateSet('${exId}',${idx},'load',this.value)"
-            oninput="updateSet('${exId}',${idx},'load',this.value)">
-        </div>
+        ${loadField}
         <div class="set-field">
           <label>Repetições</label>
           <input type="number" inputmode="numeric" placeholder="0"
@@ -1233,10 +1304,18 @@ function renderSets(exId) {
         </div>
       </div>
       <button class="set-delete" onclick="removeSet('${exId}',${idx})">✕</button>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 
   updateSetsDoneLabel(exId);
+}
+
+function toggleNoLoad(exId, idx) {
+  const s = currentSessionData[exId]?.[idx];
+  if (!s) return;
+  s.noLoad = !s.noLoad;
+  if (s.noLoad) s.load = '';
+  renderSets(exId);
 }
 
 function updateSet(exId, idx, field, value) {
@@ -1250,7 +1329,7 @@ function updateSetsDoneLabel(exId) {
   const t = TREINOS[currentTreino];
   const ex = t?.exercises.find(e => e.id === exId);
   const sets = currentSessionData[exId] || [];
-  const done = sets.filter(s => s.reps && s.load).length;
+  const done = sets.filter(s => s.reps && (s.load || s.noLoad)).length;
   const label = document.getElementById(`sets-done-${exId}`);
   if (label) {
     label.textContent = `${done}/${ex?.sets || sets.length}`;
@@ -1264,7 +1343,7 @@ function saveTreino() {
   let hasAny = false;
 
   Object.entries(currentSessionData).forEach(([exId, sets]) => {
-    const validSets = sets.filter(s => s.reps || s.load);
+    const validSets = sets.filter(s => s.reps || s.load || s.noLoad);
     if (validSets.length) {
       exercises[exId] = validSets;
       hasAny = true;
@@ -1279,7 +1358,7 @@ function saveTreino() {
   const db = getDB();
   const session = {
     id: Date.now().toString(),
-    date: getTodayKey(),
+    date: currentSessionDate,
     treino: currentTreino,
     exercises
   };
@@ -1334,7 +1413,7 @@ function renderHistory() {
         <div class="sc-ex-name">${exInfo?.name || exId}</div>
         <div class="sc-sets-chips">
           ${sets.map((st, i) => `
-            <div class="sc-chip">S${i+1}: <strong>${st.load || 0}kg</strong> × <strong>${st.reps || 0}</strong></div>
+            <div class="sc-chip">S${i+1}: <strong>${st.noLoad ? 'S/ carga' : (st.load || 0)+'kg'}</strong> × <strong>${st.reps || 0}</strong></div>
           `).join('')}
         </div>
       </div>`;
@@ -1348,6 +1427,7 @@ function renderHistory() {
           <div class="sc-summary">${exCount} exerc. · ${totalSets} séries</div>
         </div>
         <div class="sc-actions">
+          <button class="sc-del" onclick="event.stopPropagation();editSessionDate('${s.id}','${s.date}')" title="Editar data">📅</button>
           <button class="sc-del" onclick="event.stopPropagation();deleteSession('${s.id}')">🗑</button>
           <span style="color:var(--text-muted);font-size:18px">▼</span>
         </div>
@@ -1389,6 +1469,34 @@ function deleteSession(id) {
     renderHistory();
     showToast('Sessão excluída.', 'error');
   });
+}
+
+function editSessionDate(id, currentDate) {
+  // Build inline date picker inside the modal
+  const overlay = document.getElementById('modal-overlay');
+  document.querySelector('#modal-overlay .modal h3').textContent = 'EDITAR DATA';
+  document.getElementById('modal-msg').innerHTML = `
+    <span style="font-size:13px;color:var(--text-muted)">Altere a data desta sessão:</span><br><br>
+    <input type="date" id="edit-date-input" value="${currentDate}" max="${getTodayKey()}"
+      style="width:100%;background:var(--surface2);border:1px solid var(--accent);color:var(--text);
+             padding:12px 14px;border-radius:10px;font-family:var(--font-mono);font-size:16px;
+             outline:none;-webkit-appearance:none">
+  `;
+  document.getElementById('modal-confirm').textContent = 'Salvar';
+  document.getElementById('modal-confirm').onclick = () => {
+    const newDate = document.getElementById('edit-date-input').value;
+    if (!newDate) { showToast('Selecione uma data!', 'error'); return; }
+    const db = getDB();
+    const session = db.sessions.find(s => s.id === id);
+    if (session) {
+      session.date = newDate;
+      saveDB(db);
+      renderHistory();
+      showToast('✓ Data atualizada!', 'success');
+    }
+    closeModal();
+  };
+  overlay.classList.add('open');
 }
 
 // ══════════════════════════════════════════════
