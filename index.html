@@ -430,7 +430,7 @@ const TREINOS = {
     {id:'panturrilha_pe',    name:'Panturrilha em Pé',                              sets:3,reps:'6-8'},
   ]}
 };
-const SCHEDULE={1:'A',2:'B',3:'C',4:null,5:'D',6:'E',0:null};
+const SCHEDULE={1:'A',2:'B',3:null,4:'C',5:'D',6:null,0:null};
 const DAY_NAMES=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 
 // ══════════════════════════
@@ -531,9 +531,27 @@ function renderHome(){
   checkResumeBanner();
   const now=new Date(),dow=now.getDay(),tk=SCHEDULE[dow];
   const sec=document.getElementById('today-section');
-  if(!tk||!TREINOS[tk]){
-    sec.innerHTML=`<div class="rest-card"><div class="rest-emoji">😴</div><div class="rest-title">DIA DE DESCANSO</div><p style="color:var(--text-muted);font-size:13px;margin-top:6px">${DAY_NAMES[dow]} — Recupere-se!</p></div>`;
+  // Check if a session was already logged today regardless of schedule
+  const todayStr = todayKey();
+  const todaySession = cache.filter(s => s.date === todayStr).sort((a,b)=>b.id-a.id)[0];
+
+  if(todaySession){
+    // Trained today — show what was done
+    const tDone = TREINOS[todaySession.treino];
+    const exCount = Object.keys(todaySession.exercises||{}).length;
+    const totalSets = Object.values(todaySession.exercises||{}).reduce((a,b)=>a+b.length,0);
+    sec.innerHTML=`<div class="today-card" style="background:var(--surface);border:1px solid var(--green);color:var(--text)">
+      <div class="today-label" style="color:var(--green);opacity:1">✓ TREINO CONCLUÍDO HOJE</div>
+      <div class="today-name" style="color:var(--green)">${todaySession.treino}</div>
+      <div class="today-sub" style="color:var(--text-muted)">${tDone?tDone.sub:'Treino realizado'}</div>
+      <div style="margin-top:12px;font-family:var(--font-mono);font-size:11px;color:var(--text-muted);letter-spacing:1px">${exCount} EXERCÍCIOS · ${totalSets} SÉRIES</div>
+      <button class="today-btn" style="background:var(--surface2);color:var(--text-muted);margin-top:14px" onclick="openTreinoSelector()">+ REGISTRAR OUTRO TREINO</button>
+    </div>`;
+  } else if(!tk||!TREINOS[tk]){
+    // Rest day — no session logged
+    sec.innerHTML=`<div class="rest-card"><div class="rest-emoji">😴</div><div class="rest-title">DIA DE DESCANSO</div><p style="color:var(--text-muted);font-size:13px;margin-top:6px">${DAY_NAMES[dow]} — Recupere-se!</p><button class="today-btn" style="background:var(--surface2);color:var(--text-muted);border:1px solid var(--border);margin-top:16px" onclick="openTreinoSelector()">+ Registrar treino mesmo assim</button></div>`;
   }else{
+    // Scheduled training day
     const t=TREINOS[tk];
     sec.innerHTML=`<div class="today-card"><div class="today-label">Hoje — ${DAY_NAMES[dow]}</div><div class="today-name">${t.name}</div><div class="today-sub">${t.sub}</div><button class="today-btn" onclick="openTreinoSelector()">▶ INICIAR TREINO</button></div>`;
   }
