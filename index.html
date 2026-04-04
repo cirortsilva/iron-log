@@ -357,6 +357,7 @@ CREATE POLICY "allow_all" ON sessions
   </div>
   <button class="timer-btn primary" id="timer-toggle-btn" onclick="timerToggle()">⏸</button>
   <button class="timer-btn" onclick="timerReset()" title="Reiniciar">↺</button>
+  <button class="timer-btn" id="notif-btn" onclick="requestAlertPermission()" title="Ativar alertas" style="font-size:18px">🔔</button>
 </div>
 
 
@@ -1005,28 +1006,41 @@ function resumeWorkout(){
 // ══════════════════════════
 const REST_TARGET = 150; // 2:30 em segundos
 let timerInterval = null;
-let timerSeconds = 0;
 let timerRunning = false;
+let timerStartEpoch = null;   // Date.now() quando o timer começou/retomou
+let timerElapsedOnPause = 0; // segundos já decorridos antes de uma pausa
+
+// Calcula os segundos reais decorridos
+function timerGetSeconds(){
+  if(!timerRunning || timerStartEpoch === null) return timerElapsedOnPause;
+  return timerElapsedOnPause + Math.floor((Date.now() - timerStartEpoch) / 1000);
+}
 
 function timerStart(){
-  timerSeconds = 0;
+  timerElapsedOnPause = 0;
+  timerStartEpoch = Date.now();
   timerRunning = true;
+  _timerAlertedDone = false;
   clearInterval(timerInterval);
-  timerInterval = setInterval(timerTick, 1000);
+  timerInterval = setInterval(timerTick, 500); // 500ms para maior precisão
   document.getElementById('timer-bar').classList.add('visible');
   document.getElementById('timer-bar').classList.remove('done');
   document.getElementById('timer-display').classList.remove('over');
   document.getElementById('timer-progress').classList.remove('over');
   document.getElementById('timer-toggle-btn').textContent = '⏸';
   timerRender();
+  // Agenda o som e mantém sessão de áudio ativa (essencial no iOS)
+  scheduleAudioAlert(REST_TARGET);
+  startKeepAlive(REST_TARGET + 5);
 }
 
+let _timerAlertedDone = false;
 function timerTick(){
-  timerSeconds++;
+  const secs = timerGetSeconds();
   timerRender();
-  if(timerSeconds === REST_TARGET){
-    // Vibrate on target
-    if(navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 400]);
+  if(secs >= REST_TARGET && !_timerAlertedDone){
+    _timerAlertedDone = true;
+    sendSystemNotification();
     document.getElementById('timer-bar').classList.add('done');
     document.getElementById('timer-display').classList.add('over');
     document.getElementById('timer-progress').classList.add('over');
@@ -1035,17 +1049,18 @@ function timerTick(){
 }
 
 function timerRender(){
-  const m = Math.floor(timerSeconds / 60);
-  const s = timerSeconds % 60;
+  const secs = timerGetSeconds();
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
   document.getElementById('timer-display').textContent = m + ':' + String(s).padStart(2,'0');
-  const pct = Math.min((timerSeconds / REST_TARGET) * 100, 100);
+  const pct = Math.min((secs / REST_TARGET) * 100, 100);
   document.getElementById('timer-progress').style.width = pct + '%';
-  const remaining = REST_TARGET - timerSeconds;
+  const remaining = REST_TARGET - secs;
   if(remaining > 0){
     const rm = Math.floor(remaining/60), rs = remaining%60;
     document.getElementById('timer-target-label').textContent = 'faltam ' + rm + ':' + String(rs).padStart(2,'0');
   } else {
-    const over = timerSeconds - REST_TARGET;
+    const over = secs - REST_TARGET;
     const om = Math.floor(over/60), os = over%60;
     document.getElementById('timer-target-label').textContent = '+' + om + ':' + String(os).padStart(2,'0') + ' acima da meta';
   }
@@ -1053,33 +1068,213 @@ function timerRender(){
 
 function timerToggle(){
   if(timerRunning){
+    timerElapsedOnPause = timerGetSeconds();
+    timerStartEpoch = null;
     timerRunning = false;
     clearInterval(timerInterval);
     document.getElementById('timer-toggle-btn').textContent = '▶';
   } else {
+    timerStartEpoch = Date.now();
     timerRunning = true;
-    timerInterval = setInterval(timerTick, 1000);
+    clearInterval(timerInterval);
+    timerInterval = setInterval(timerTick, 500);
     document.getElementById('timer-toggle-btn').textContent = '⏸';
   }
 }
 
 function timerReset(){
-  timerSeconds = 0;
+  timerElapsedOnPause = 0;
+  timerStartEpoch = Date.now();
   timerRunning = true;
+  _timerAlertedDone = false;
   clearInterval(timerInterval);
-  timerInterval = setInterval(timerTick, 1000);
+  timerInterval = setInterval(timerTick, 500);
   document.getElementById('timer-bar').classList.remove('done');
   document.getElementById('timer-display').classList.remove('over');
   document.getElementById('timer-progress').classList.remove('over');
   document.getElementById('timer-toggle-btn').textContent = '⏸';
   timerRender();
+  scheduleAudioAlert(REST_TARGET);
+  startKeepAlive(REST_TARGET + 5);
 }
 
 function timerClose(){
   clearInterval(timerInterval);
   timerRunning = false;
+  timerElapsedOnPause = 0;
+  timerStartEpoch = null;
+  _timerAlertedDone = false;
+  cancelAudioAlert();
+  stopKeepAlive();
   document.getElementById('timer-bar').classList.remove('visible');
 }
+
+// ══════════════════════════════════════════════════════
+// ALERTAS — SOM via AudioContext (funciona com tela bloqueada no iOS)
+// ══════════════════════════════════════════════════════
+// Estratégia para iPhone/Safari:
+//   1. AudioContext desbloqueado por gesto do usuário (toque no botão)
+//   2. Oscilador silencioso mantém a sessão de áudio ativa durante o descanso
+//   3. Bipes agendados via ctx.currentTime tocam no momento exato
+//   ⚠️  Requer que o iPhone NÃO esteja no modo silencioso (chave lateral)
+
+let _audioCtx = null;
+let _keepAliveOsc = null;   // oscilador silencioso que mantém sessão ativa
+let _scheduledOscs = [];    // bipes agendados
+let _audioUnlocked = false;
+
+function getAudioCtx(){
+  if(!_audioCtx){
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if(_audioCtx.state === 'suspended') _audioCtx.resume();
+  return _audioCtx;
+}
+
+// Deve ser chamado dentro de um evento de toque (gesto do usuário)
+function unlockAudio(){
+  try{
+    const ctx = getAudioCtx();
+    // Toca um buffer vazio para desbloquear a sessão de áudio no iOS
+    const buf = ctx.createBuffer(1, 1, 22050);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+    _audioUnlocked = true;
+    updateNotifBtn();
+  } catch(e){ console.warn('Audio unlock error:', e); }
+}
+
+// Oscilador a 1Hz com ganho ~0 — praticamente inaudível
+// mas mantém o iOS AudioContext ativo com tela bloqueada
+function startKeepAlive(durationSeconds){
+  stopKeepAlive();
+  try{
+    const ctx = getAudioCtx();
+    _keepAliveOsc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    _keepAliveOsc.connect(gain);
+    gain.connect(ctx.destination);
+    gain.gain.value = 0.0001;   // praticamente inaudível
+    _keepAliveOsc.frequency.value = 1;
+    _keepAliveOsc.start();
+    // Para automaticamente após o período de descanso + margem
+    _keepAliveOsc.stop(ctx.currentTime + durationSeconds + 3);
+    _keepAliveOsc.onended = () => { _keepAliveOsc = null; };
+  } catch(e){}
+}
+
+function stopKeepAlive(){
+  if(_keepAliveOsc){
+    try{ _keepAliveOsc.stop(); } catch(e){}
+    _keepAliveOsc = null;
+  }
+}
+
+function scheduleAudioAlert(delaySeconds){
+  cancelAudioAlert();
+  try{
+    const ctx = getAudioCtx();
+    // 3 bipes: 660Hz · 660Hz · 880Hz
+    [[660, 0], [660, 0.38], [880, 0.76]].forEach(([freq, offset]) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const t = ctx.currentTime + delaySeconds + offset;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.8, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+      osc.start(t);
+      osc.stop(t + 0.35);
+      _scheduledOscs.push(osc);
+    });
+  } catch(e){ console.warn('scheduleAudioAlert error:', e); }
+}
+
+function cancelAudioAlert(){
+  _scheduledOscs.forEach(o => { try{ o.stop(); } catch(e){} });
+  _scheduledOscs = [];
+}
+
+function playAlertNow(){ scheduleAudioAlert(0); }
+
+// Notificações — no Safari iOS só funcionam se o app foi adicionado
+// à tela de início como PWA (iOS 16.4+)
+async function requestAlertPermission(){
+  unlockAudio(); // aproveita o gesto para desbloquear o áudio
+
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const isPWA = window.navigator.standalone === true;
+
+  if(isIOS && !isPWA){
+    showToast('Som ativado! Para notificações: Compartilhar → Tela de Início', 'success');
+    updateNotifBtn();
+    return;
+  }
+  if(!('Notification' in window)){
+    showToast('Som ativado!', 'success');
+    updateNotifBtn();
+    return;
+  }
+  if(Notification.permission === 'granted'){
+    showToast('🔔 Som + notificação ativados!', 'success');
+    updateNotifBtn();
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  showToast(perm === 'granted' ? '🔔 Notificações ativadas!' : '🔊 Só o som estará ativo.', perm === 'granted' ? 'success' : '');
+  updateNotifBtn();
+}
+
+function updateNotifBtn(){
+  const btn = document.getElementById('notif-btn');
+  if(!btn) return;
+  const hasNotif = typeof Notification !== 'undefined' && Notification.permission === 'granted';
+  const isPWA = window.navigator.standalone === true;
+  if(_audioUnlocked){
+    btn.textContent = hasNotif ? '🔔' : '🔊';
+    btn.style.color = 'var(--accent)';
+    btn.title = hasNotif ? 'Som + notificação ativos' : 'Som ativo (toque para notificações)';
+  } else {
+    btn.textContent = '🔕';
+    btn.style.color = 'var(--text-muted)';
+    btn.title = isPWA ? 'Toque para ativar alertas' : 'Toque para ativar som';
+  }
+}
+
+function sendSystemNotification(){
+  if(typeof Notification !== 'undefined' && Notification.permission === 'granted'){
+    try{
+      new Notification('IRON LOG — Descanso concluído!', {
+        body: '💪 2:30 encerrados. Hora da próxima série!',
+        tag: 'rest-timer', renotify: true,
+      });
+    } catch(e){}
+  }
+}
+
+// Ao voltar ao foreground — recalcula tempo real e alerta se necessário
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'visible' && timerRunning){
+    timerRender();
+    clearInterval(timerInterval);
+    timerInterval = setInterval(timerTick, 500);
+    // Se passou do target com tela bloqueada, alerta visual imediato
+    if(timerGetSeconds() >= REST_TARGET && !_timerAlertedDone){
+      _timerAlertedDone = true;
+      playAlertNow();
+      sendSystemNotification();
+      document.getElementById('timer-bar').classList.add('done');
+      document.getElementById('timer-display').classList.add('over');
+      document.getElementById('timer-progress').classList.add('over');
+      setTimeout(()=>document.getElementById('timer-bar').classList.remove('done'), 2500);
+    }
+  }
+});
 
 function todayKey(){return new Date().toISOString().slice(0,10);}
 function fmt(s){if(!s)return'';const[y,m,d]=s.split('-');return`${d}/${m}/${y}`;}
@@ -1090,7 +1285,7 @@ function fmt(s){if(!s)return'';const[y,m,d]=s.split('-');return`${d}/${m}/${y}`;
 async function init(){
   if(!loadConfig()){showSetupScreen();return;}
   showLoading('CONECTANDO...');
-  try{await refreshCache();renderHome();}
+  try{await refreshCache();renderHome();updateNotifBtn();}
   catch(e){showToast('Erro de conexão','error');showSetupScreen();}
   hideLoading();
 }
