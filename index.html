@@ -72,12 +72,18 @@
   .rest-title{font-family:var(--font-display);font-size:32px;color:var(--text-muted);letter-spacing:2px}
   .section-title{font-family:var(--font-display);font-size:22px;letter-spacing:2px;color:var(--text-muted);margin-bottom:12px}
   .week-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:24px}
-  .week-day{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 4px;text-align:center;font-size:9px;font-family:var(--font-mono);color:var(--text-muted);text-transform:uppercase}
-  .week-day .wd-name{margin-bottom:4px}
+  .week-day{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 4px;text-align:center;font-size:9px;font-family:var(--font-mono);color:var(--text-muted);text-transform:uppercase;position:relative;overflow:hidden}
+  .week-day .wd-name{margin-bottom:2px}
   .week-day .wd-badge{font-size:11px;font-family:var(--font-display);letter-spacing:1px;color:var(--text-dim)}
   .week-day.today{border-color:var(--accent);background:rgba(200,255,0,.06)}
   .week-day.today .wd-name,.week-day.today .wd-badge{color:var(--accent)}
   .week-day.rest .wd-badge{color:#333}
+  .week-day .wd-done{font-size:10px;font-family:var(--font-display);letter-spacing:1px;color:var(--green);margin-top:3px;line-height:1}
+  .week-day.trained{border-color:rgba(0,230,118,.3)}
+  .week-day.trained::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--green);border-radius:0 0 6px 6px}
+  .week-day.trained.today::after{background:var(--accent)}
+  .wd-dots{display:flex;justify-content:center;gap:2px;margin-top:3px;min-height:5px}
+  .wd-dot{width:5px;height:5px;border-radius:50%;background:var(--green);flex-shrink:0}
   .recent-list{display:flex;flex-direction:column;gap:10px}
   .recent-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;transition:border-color .15s}
   .recent-card:active{border-color:var(--accent)}
@@ -556,7 +562,36 @@ function renderHome(){
     sec.innerHTML=`<div class="today-card"><div class="today-label">Hoje — ${DAY_NAMES[dow]}</div><div class="today-name">${t.name}</div><div class="today-sub">${t.sub}</div><button class="today-btn" onclick="openTreinoSelector()">▶ INICIAR TREINO</button></div>`;
   }
   const wg=document.getElementById('week-grid');
-  wg.innerHTML=DAY_NAMES.map((d,i)=>`<div class="week-day ${i===dow?'today':''} ${!SCHEDULE[i]?'rest':''}"><div class="wd-name">${d}</div><div class="wd-badge">${SCHEDULE[i]||'—'}</div></div>`).join('');
+  // Build a map: day-of-week index -> sessions done this week
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - dow); // Sunday of current week
+  weekStart.setHours(0,0,0,0);
+
+  const weekSessions = {}; // dow index -> [session, ...]
+  cache.forEach(s => {
+    const d = new Date(s.date + 'T12:00:00');
+    const diff = Math.round((d - weekStart) / 86400000);
+    if(diff >= 0 && diff <= 6){
+      if(!weekSessions[diff]) weekSessions[diff] = [];
+      weekSessions[diff].push(s);
+    }
+  });
+
+  wg.innerHTML=DAY_NAMES.map((d,i)=>{
+    const sessions = weekSessions[i] || [];
+    const trained = sessions.length > 0;
+    const labels = sessions.map(s=>s.treino).join('+');
+    const dotsHTML = sessions.length
+      ? `<div class="wd-dots">${sessions.slice(0,3).map(()=>'<div class="wd-dot"></div>').join('')}</div>`
+      : '<div class="wd-dots"></div>';
+    const doneLabel = trained ? `<div class="wd-done">${labels}</div>` : '';
+    return `<div class="week-day ${i===dow?'today':''} ${!SCHEDULE[i]?'rest':''} ${trained?'trained':''}">
+      <div class="wd-name">${d}</div>
+      <div class="wd-badge">${SCHEDULE[i]||'—'}</div>
+      ${doneLabel}
+      ${dotsHTML}
+    </div>`;
+  }).join('');
   const rec=document.getElementById('recent-sessions');
   const sessions=[...cache].reverse().slice(0,5);
   if(!sessions.length){rec.innerHTML=`<div class="empty-state"><div class="es-icon">🔑</div><p>NENHUM TREINO REGISTRADO AINDA</p></div>`;return;}
