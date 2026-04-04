@@ -562,28 +562,30 @@ function renderHome(){
     sec.innerHTML=`<div class="today-card"><div class="today-label">Hoje — ${DAY_NAMES[dow]}</div><div class="today-name">${t.name}</div><div class="today-sub">${t.sub}</div><button class="today-btn" onclick="openTreinoSelector()">▶ INICIAR TREINO</button></div>`;
   }
   const wg=document.getElementById('week-grid');
-  // Build a map: day-of-week index -> sessions done this week
-  const weekStart = new Date(now);
-  weekStart.setDate(now.getDate() - dow); // Sunday of current week
-  weekStart.setHours(0,0,0,0);
+  // Compute the date string (YYYY-MM-DD) for each day of the current week
+  // dow=0 (Sun) ... 6 (Sat). Week starts on Sunday.
+  const weekDateStrings = DAY_NAMES.map((_, i) => {
+    const d = new Date(now);
+    d.setDate(now.getDate() - dow + i);
+    const y = d.getFullYear();
+    const m = String(d.getMonth()+1).padStart(2,'0');
+    const day = String(d.getDate()).padStart(2,'0');
+    return `${y}-${m}-${day}`;
+  });
 
-  const weekSessions = {}; // dow index -> [session, ...]
+  // Map date string -> sessions from cache (historical data)
+  const sessionsByDate = {};
   cache.forEach(s => {
-    const d = new Date(s.date + 'T12:00:00');
-    const diff = Math.round((d - weekStart) / 86400000);
-    if(diff >= 0 && diff <= 6){
-      if(!weekSessions[diff]) weekSessions[diff] = [];
-      weekSessions[diff].push(s);
-    }
+    if(!sessionsByDate[s.date]) sessionsByDate[s.date] = [];
+    sessionsByDate[s.date].push(s);
   });
 
   wg.innerHTML=DAY_NAMES.map((d,i)=>{
-    const sessions = weekSessions[i] || [];
+    const dateStr = weekDateStrings[i];
+    const sessions = sessionsByDate[dateStr] || [];
     const trained = sessions.length > 0;
-    const labels = sessions.map(s=>s.treino).join('+');
-    const dotsHTML = sessions.length
-      ? `<div class="wd-dots">${sessions.slice(0,3).map(()=>'<div class="wd-dot"></div>').join('')}</div>`
-      : '<div class="wd-dots"></div>';
+    const labels = [...new Set(sessions.map(s=>s.treino))].join('+');
+    const dotsHTML = `<div class="wd-dots">${sessions.slice(0,3).map(()=>'<div class="wd-dot"></div>').join('')}</div>`;
     const doneLabel = trained ? `<div class="wd-done">${labels}</div>` : '';
     return `<div class="week-day ${i===dow?'today':''} ${!SCHEDULE[i]?'rest':''} ${trained?'trained':''}">
       <div class="wd-name">${d}</div>
