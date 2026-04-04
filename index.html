@@ -73,7 +73,8 @@
   .section-title{font-family:var(--font-display);font-size:22px;letter-spacing:2px;color:var(--text-muted);margin-bottom:12px}
   .week-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:24px}
   .week-day{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 4px;text-align:center;font-size:9px;font-family:var(--font-mono);color:var(--text-muted);text-transform:uppercase;position:relative;overflow:hidden}
-  .week-day .wd-name{margin-bottom:2px}
+  .week-day .wd-name{margin-bottom:1px}
+  .week-day .wd-date{font-size:11px;font-family:var(--font-display);letter-spacing:1px;color:var(--text-muted);margin-bottom:2px;line-height:1}
   .week-day .wd-badge{font-size:11px;font-family:var(--font-display);letter-spacing:1px;color:var(--text-dim)}
   .week-day.today{border-color:var(--accent);background:rgba(200,255,0,.06)}
   .week-day.today .wd-name,.week-day.today .wd-badge{color:var(--accent)}
@@ -406,7 +407,7 @@ const TREINOS = {
     {id:'agach_b',           name:'Agachamento Livre ou Smith',                     sets:3,reps:'6-8',warmup:'1x12',note:'Escolher e manter'},
     {id:'leg_press_45',      name:'Leg Press 45°',                                  sets:3,reps:'6-8'},
     {id:'cadeira_extensora',     name:'Cadeira Extensora',                              sets:3,reps:'6-8'},
-    {id:'leg_press_180',     name:'Leg Press 180° Unilateral c/ Step - Pé da Frente',              sets:3,reps:'6-8'},
+    {id:'leg_press_180',     name:'Leg Press 180° Unilateral c/ Step',              sets:3,reps:'6-8'},
     {id:'supino_inclinado',     name:'Supino Inclinado Articulado ou c/ Halter',       sets:3,reps:'6-8',note:'Escolher e manter'},
     {id:'peck_deck',       name:'Peck Deck',                                      sets:3,reps:'6-8'},
     {id:'triceps_barra_w',   name:'Tríceps Polia Alta c/ Barra W',                  sets:3,reps:'6-8'},
@@ -419,7 +420,7 @@ const TREINOS = {
     {id:'flexora_pe',        name:'Flexora Unilateral em Pé',                       sets:3,reps:'6-8'},
     {id:'mesa_flexora',       name:'Mesa Flexora',                                   sets:3,reps:'6-8'},
     {id:'remada_tri',        name:'Remada Baixa Triângulo',                         sets:3,reps:'6-8'},
-    {id:'elev_post',         name:'Elevação Posterior Unilateral na Polia - Altura do Ombro',         sets:3,reps:'6-8'},
+    {id:'elev_post',         name:'Elevação Posterior Unilateral na Polia',         sets:3,reps:'6-8'},
     {id:'rosca_super',       name:'Rosca Superman',                                 sets:3,reps:'6-8'},
     {id:'rosca_martelo',     name:'Rosca Martelo Cruzado',                          sets:3,reps:'6-8'},
   ]},
@@ -427,7 +428,7 @@ const TREINOS = {
     {id:'desenvolvimento',   name:'Desenvolvimento Articulado ou c/ Halter',        sets:3,reps:'6-8',warmup:'1x10',note:'Escolher e manter'},
     {id:'supino_inclinado',     name:'Supino Inclinado Articulado ou c/ Halter',       sets:3,reps:'6-8',note:'Escolher e manter'},
     {id:'peck_deck',       name:'Peck Deck',                                      sets:3,reps:'6-8'},
-    {id:'elev_lateral',      name:'Elevação Lateral Unilateral c/ Caneleira na Polia - Altura do Glúteo',sets:3,reps:'6-8'},
+    {id:'elev_lateral',      name:'Elevação Lateral Unilateral c/ Caneleira na Polia',sets:3,reps:'6-8'},
     {id:'elev_frontal',      name:'Elevação Frontal c/ Corda Polia Baixa',          sets:3,reps:'6-8'},
     {id:'triceps_corda',     name:'Tríceps Corda',                                  sets:3,reps:'6-8'},
     {id:'triceps_coice',     name:'Tríceps Coice Unilateral',                       sets:3,reps:'6-8'},
@@ -445,11 +446,17 @@ const DAY_NAMES=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 let SB_URL='', SB_KEY='';
 const CFG_KEY='ironlog_sb_cfg';
 
+const _SB_URL_DEFAULT = 'https://fzzlnilavphomhzgwutx.supabase.co';
+const _SB_KEY_DEFAULT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ6emxuaWxhdnBob21oemd3dXR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUyNTY3MzgsImV4cCI6MjA5MDgzMjczOH0.skDDLpsU9InjQ6dpn9n6q9h7_NQlr_ivrr9wx34tono';
+
 function loadConfig(){
-  try{const c=JSON.parse(localStorage.getItem(CFG_KEY)||'null');if(c?.url&&c?.key){SB_URL=c.url.replace(/\/$/,'');SB_KEY=c.key;return true}}catch{}return false;
+  // Always fall back to embedded credentials
+  SB_URL = _SB_URL_DEFAULT;
+  SB_KEY = _SB_KEY_DEFAULT;
+  return true;
 }
-function saveConfig(url,key){localStorage.setItem(CFG_KEY,JSON.stringify({url,key}));SB_URL=url.replace(/\/$/,'');SB_KEY=key;}
-function clearConfig(){localStorage.removeItem(CFG_KEY);SB_URL='';SB_KEY='';}
+function saveConfig(url,key){SB_URL=url||_SB_URL_DEFAULT;SB_KEY=key||_SB_KEY_DEFAULT;}
+function clearConfig(){SB_URL=_SB_URL_DEFAULT;SB_KEY=_SB_KEY_DEFAULT;}
 
 async function sbFetch(path,opts={}){
   const r=await fetch(`${SB_URL}/rest/v1${path}`,{...opts,headers:{'apikey':SB_KEY,'Authorization':`Bearer ${SB_KEY}`,'Content-Type':'application/json','Prefer':opts.prefer||'',...opts.headers}});
@@ -587,8 +594,10 @@ function renderHome(){
     const labels = [...new Set(sessions.map(s=>s.treino))].join('+');
     const dotsHTML = `<div class="wd-dots">${sessions.slice(0,3).map(()=>'<div class="wd-dot"></div>').join('')}</div>`;
     const doneLabel = trained ? `<div class="wd-done">${labels}</div>` : '';
+    const [,, dayNum] = weekDateStrings[i].split('-');
     return `<div class="week-day ${i===dow?'today':''} ${!SCHEDULE[i]?'rest':''} ${trained?'trained':''}">
       <div class="wd-name">${d}</div>
+      <div class="wd-date">${parseInt(dayNum)}</div>
       <div class="wd-badge">${SCHEDULE[i]||'—'}</div>
       ${doneLabel}
       ${dotsHTML}
