@@ -1136,28 +1136,49 @@ function getNtfyTopic(){
   return _ntfyTopic;
 }
 
-async function ntfySchedule(delaySeconds){
-  const topic = getNtfyTopic();
-  const configured = !!localStorage.getItem('ironlog_ntfy_configured');
-  if(!configured) return; // só envia se o usuário confirmou a configuração
+async function ntfySend(payload, showErrors=false){
+  const ctrl = new AbortController();
+  const timeout = setTimeout(()=>ctrl.abort(), 8000);
   try{
-    const res = await fetch(`${NTFY_BASE}/${topic}`, {
-      method:'POST',
-      headers:{
-        'Title':'IRON LOG — Descanso concluído!',
-        'X-Delay': Math.round(delaySeconds) + 's',
-        'X-Tags':'muscle,stopwatch',
-        'X-Priority':'4',
-      },
-      body:'💪 2:30 encerrados. Hora da próxima série!'
+    const res = await fetch(`${NTFY_BASE}`, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
+    clearTimeout(timeout);
     if(res.ok){
       const data = await res.json().catch(()=>({}));
-      _ntfyPendingMsgId = data.id || null;
+      return data.id || null;
     } else {
-      console.warn('ntfy schedule failed:', res.status);
+      const txt = await res.text().catch(()=>'');
+      if(showErrors) showToast('Erro ntfy: ' + res.status, 'error');
+      console.warn('ntfy error', res.status, txt);
+      return null;
     }
-  } catch(e){ console.warn('ntfy schedule error:', e); }
+  } catch(e){
+    clearTimeout(timeout);
+    if(e.name === 'AbortError'){
+      if(showErrors) showToast('ntfy.sh sem resposta (timeout)', 'error');
+    } else {
+      if(showErrors) showToast('Sem conexão com ntfy.sh', 'error');
+    }
+    console.warn('ntfy fetch error:', e);
+    return null;
+  }
+}
+
+async function ntfySchedule(delaySeconds){
+  if(!localStorage.getItem('ironlog_ntfy_configured')) return;
+  const id = await ntfySend({
+    topic: getNtfyTopic(),
+    title: 'IRON LOG — Descanso concluído!',
+    message: '💪 2:30 encerrados. Hora da próxima série!',
+    delay: Math.round(delaySeconds) + 's',
+    tags: ['muscle'],
+    priority: 4,
+  });
+  _ntfyPendingMsgId = id;
 }
 
 function ntfyCancel(){
@@ -1166,28 +1187,15 @@ function ntfyCancel(){
 }
 
 async function ntfyTest(){
-  const topic = getNtfyTopic();
-  try{
-    const res = await fetch(`${NTFY_BASE}/${topic}`, {
-      method:'POST',
-      headers:{
-        'Title':'IRON LOG — Teste de alerta',
-        'X-Tags':'white_check_mark',
-        'X-Priority':'4',
-      },
-      body:'Configuração funcionando! Alertas ativos.'
-    });
-    if(res.ok){
-      showToast('Teste enviado! Verifique o ntfy.', 'success');
-    } else {
-      const err = await res.text();
-      showToast('Erro ntfy: ' + res.status, 'error');
-      console.warn('ntfy test error:', err);
-    }
-  } catch(e){
-    showToast('Falha na conexão com ntfy.sh', 'error');
-    console.warn('ntfy test fetch error:', e);
-  }
+  showToast('Enviando teste...', '');
+  const id = await ntfySend({
+    topic: getNtfyTopic(),
+    title: 'IRON LOG — Teste',
+    message: 'Funcionando! O alerta vai chegar assim no fim do descanso.',
+    tags: ['white_check_mark'],
+    priority: 4,
+  }, true);
+  if(id) showToast('✓ Teste enviado! Verifique o ntfy.', 'success');
 }
 
 // ── AudioContext — som de fallback quando app está em foreground ──────────────
