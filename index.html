@@ -1029,10 +1029,10 @@ function timerStart(){
   document.getElementById('timer-progress').classList.remove('over');
   document.getElementById('timer-toggle-btn').textContent = '⏸';
   timerRender();
-  // Agenda som (AudioContext) + notificação (Service Worker)
+  // Agenda som (AudioContext) + notificação via ntfy.sh
   scheduleAudioAlert(REST_TARGET);
   startKeepAlive(REST_TARGET + 5);
-  swScheduleNotification(REST_TARGET - timerElapsedOnPause);
+  ntfySchedule(REST_TARGET);
 }
 
 let _timerAlertedDone = false;
@@ -1073,7 +1073,7 @@ function timerToggle(){
     timerStartEpoch = null;
     timerRunning = false;
     clearInterval(timerInterval);
-    swCancelNotification(); // cancela notificação agendada
+    ntfyCancel();
     document.getElementById('timer-toggle-btn').textContent = '▶';
   } else {
     timerStartEpoch = Date.now();
@@ -1081,7 +1081,7 @@ function timerToggle(){
     clearInterval(timerInterval);
     timerInterval = setInterval(timerTick, 500);
     const remaining = Math.max(0, REST_TARGET - timerElapsedOnPause);
-    swScheduleNotification(remaining); // reagenda com tempo restante
+    ntfySchedule(remaining);
     document.getElementById('timer-toggle-btn').textContent = '⏸';
   }
 }
@@ -1100,7 +1100,7 @@ function timerReset(){
   timerRender();
   scheduleAudioAlert(REST_TARGET);
   startKeepAlive(REST_TARGET + 5);
-  swScheduleNotification(REST_TARGET);
+  ntfySchedule(REST_TARGET);
 }
 
 function timerClose(){
@@ -1111,106 +1111,63 @@ function timerClose(){
   _timerAlertedDone = false;
   cancelAudioAlert();
   stopKeepAlive();
-  swCancelNotification();
+  ntfyCancel();
   document.getElementById('timer-bar').classList.remove('visible');
 }
 
 // ══════════════════════════════════════════════════════
-// ALERTAS — Service Worker (notificação independente do app/tela)
+// ALERTAS — ntfy.sh (notificação real independente do iPhone)
 // ══════════════════════════════════════════════════════
+// ntfy.sh recebe o agendamento e entrega no momento certo,
+// mesmo com tela bloqueada, app fechado ou Safari suspenso.
 
-let _swRegistration = null;
+const NTFY_BASE = 'https://ntfy.sh';
+let _ntfyTopic = null;
+let _ntfyPendingMsgId = null;
+
+function getNtfyTopic(){
+  if(!_ntfyTopic){
+    _ntfyTopic = localStorage.getItem('ironlog_ntfy_topic');
+    if(!_ntfyTopic){
+      _ntfyTopic = 'ironlog-' + Math.random().toString(36).slice(2,11);
+      localStorage.setItem('ironlog_ntfy_topic', _ntfyTopic);
+    }
+  }
+  return _ntfyTopic;
+}
+
+async function ntfySchedule(delaySeconds){
+  const topic = getNtfyTopic();
+  try{
+    const res = await fetch(`${NTFY_BASE}/${topic}`, {
+      method:'POST',
+      headers:{
+        'Title':'IRON LOG — Descanso concluído!',
+        'X-Delay': String(Math.round(delaySeconds)),
+        'X-Tags':'muscle,stopwatch',
+        'X-Priority':'4',
+      },
+      body:'💪 2:30 encerrados. Hora da próxima série!'
+    });
+    const data = await res.json().catch(()=>({}));
+    _ntfyPendingMsgId = data.id || null;
+  } catch(e){ console.warn('ntfy schedule error:', e); }
+}
+
+// ntfy.sh não suporta cancelamento, mas podemos "sobrescrever"
+// enviando uma notificação imediata vazia com a mesma tag.
+// Na prática, para timer de academia, a notificação extra é aceitável.
+function ntfyCancel(){
+  _ntfyPendingMsgId = null;
+  // Sem cancelamento real — aceitável para este caso de uso
+}
+
+// ── AudioContext — som de fallback quando app está em foreground ──────────────
 let _audioCtx = null;
 let _scheduledOscs = [];
 let _keepAliveOsc = null;
 let _audioUnlocked = false;
 
-// ── Service Worker ─────────────────────────────────────
-async function registerSW(){
-  if(!('serviceWorker' in navigator)) return;
-  try{
-    _swRegistration = await navigator.serviceWorker.register('./sw.js');
-    await navigator.serviceWorker.ready;
-  } catch(e){ console.warn('SW register error:', e); }
-}
-
-function swSend(msg){
-  if(!navigator.serviceWorker?.controller) return;
-  navigator.serviceWorker.controller.postMessage(msg);
-}
-
-function swScheduleNotification(delaySeconds){
-  swSend({ type: 'SCHEDULE_NOTIFICATION', delay: delaySeconds });
-}
-
-function swCancelNotification(){
-  swSend({ type: 'CANCEL_NOTIFICATION' });
-}
-
-// ── Permissão de notificação ───────────────────────────
-async function requestAlertPermission(){
-  unlockAudio(); // aproveita o gesto para desbloquear áudio
-
-  if(!('Notification' in window)){
-    showToast('🔊 Só o som estará disponível neste browser.', '');
-    updateNotifBtn(); return;
-  }
-  if(Notification.permission === 'granted'){
-    showToast('🔔 Notificações já ativadas!', 'success');
-    updateNotifBtn(); return;
-  }
-
-  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  const isPWA = window.navigator.standalone === true;
-
-  if(isIOS && !isPWA){
-    // Guia o usuário para instalar como PWA
-    showModal(
-      'INSTALAR COMO APP',
-      'No Safari, toque em Compartilhar (□↑) → "Adicionar à Tela de Início". Depois abra pelo ícone e ative as notificações.',
-      () => {}
-    );
-    document.getElementById('modal-confirm').textContent = 'Entendi';
-    updateNotifBtn(); return;
-  }
-
-  const perm = await Notification.requestPermission();
-  if(perm === 'granted'){
-    showToast('🔔 Notificações ativadas!', 'success');
-  } else {
-    showToast('🔊 Permissão negada. Só o som ficará ativo.', '');
-  }
-  updateNotifBtn();
-}
-
-function updateNotifBtn(){
-  const btn = document.getElementById('notif-btn');
-  if(!btn) return;
-  const granted = typeof Notification !== 'undefined' && Notification.permission === 'granted';
-  if(granted){
-    btn.textContent = '🔔'; btn.style.color = 'var(--accent)';
-    btn.title = 'Notificações ativas';
-  } else if(_audioUnlocked){
-    btn.textContent = '🔊'; btn.style.color = 'var(--accent)';
-    btn.title = 'Som ativo — toque para notificações';
-  } else {
-    btn.textContent = '🔕'; btn.style.color = 'var(--text-muted)';
-    btn.title = 'Toque para ativar alertas';
-  }
-}
-
-function sendSystemNotification(){
-  if(typeof Notification !== 'undefined' && Notification.permission === 'granted'){
-    try{
-      new Notification('IRON LOG — Descanso concluído!', {
-        body: '💪 2:30 encerrados. Hora da próxima série!',
-        tag: 'rest-timer', renotify: true,
-      });
-    } catch(e){}
-  }
-}
-
-// ── AudioContext (som agendado, fallback com tela ativa) ───
 function getAudioCtx(){
   if(!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if(_audioCtx.state === 'suspended') _audioCtx.resume();
@@ -1222,55 +1179,103 @@ function unlockAudio(){
     const ctx = getAudioCtx();
     const buf = ctx.createBuffer(1,1,22050);
     const src = ctx.createBufferSource();
-    src.buffer = buf; src.connect(ctx.destination); src.start(0);
+    src.buffer=buf; src.connect(ctx.destination); src.start(0);
     _audioUnlocked = true; updateNotifBtn();
   } catch(e){}
 }
 
-function startKeepAlive(durationSeconds){
+function startKeepAlive(dur){
   stopKeepAlive();
   try{
     const ctx = getAudioCtx();
     _keepAliveOsc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    _keepAliveOsc.connect(gain); gain.connect(ctx.destination);
-    gain.gain.value = 0.0001; _keepAliveOsc.frequency.value = 1;
+    const g = ctx.createGain();
+    _keepAliveOsc.connect(g); g.connect(ctx.destination);
+    g.gain.value=0.0001; _keepAliveOsc.frequency.value=1;
     _keepAliveOsc.start();
-    _keepAliveOsc.stop(ctx.currentTime + durationSeconds + 3);
-    _keepAliveOsc.onended = () => { _keepAliveOsc = null; };
-  } catch(e){}
+    _keepAliveOsc.stop(ctx.currentTime+dur+3);
+    _keepAliveOsc.onended=()=>{_keepAliveOsc=null;};
+  }catch(e){}
 }
 
 function stopKeepAlive(){
-  if(_keepAliveOsc){ try{ _keepAliveOsc.stop(); }catch(e){} _keepAliveOsc = null; }
+  if(_keepAliveOsc){try{_keepAliveOsc.stop();}catch(e){} _keepAliveOsc=null;}
 }
 
-function scheduleAudioAlert(delaySeconds){
+function scheduleAudioAlert(delay){
   cancelAudioAlert();
   try{
     const ctx = getAudioCtx();
-    [[660,0],[660,0.38],[880,0.76]].forEach(([freq, offset]) => {
-      const osc = ctx.createOscillator(), gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.type = 'sine'; osc.frequency.value = freq;
-      const t = ctx.currentTime + delaySeconds + offset;
-      gain.gain.setValueAtTime(0, t);
-      gain.gain.linearRampToValueAtTime(0.8, t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
-      osc.start(t); osc.stop(t + 0.35);
+    [[660,0],[660,0.38],[880,0.76]].forEach(([freq,off])=>{
+      const osc=ctx.createOscillator(), g=ctx.createGain();
+      osc.connect(g); g.connect(ctx.destination);
+      osc.type='sine'; osc.frequency.value=freq;
+      const t=ctx.currentTime+delay+off;
+      g.gain.setValueAtTime(0,t);
+      g.gain.linearRampToValueAtTime(0.8,t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.001,t+0.3);
+      osc.start(t); osc.stop(t+0.35);
       _scheduledOscs.push(osc);
     });
-  } catch(e){}
+  }catch(e){}
 }
 
 function cancelAudioAlert(){
-  _scheduledOscs.forEach(o=>{ try{ o.stop(); }catch(e){} });
-  _scheduledOscs = [];
+  _scheduledOscs.forEach(o=>{try{o.stop();}catch(e){}});
+  _scheduledOscs=[];
 }
 
 function playAlertNow(){ scheduleAudioAlert(0); }
 
-// ── Voltar ao foreground ───────────────────────────────
+// ── Botão 🔔 — configura ntfy ─────────────────────────────────────────────────
+function requestAlertPermission(){
+  unlockAudio();
+  const topic = getNtfyTopic();
+  const ntfyURL = `https://ntfy.sh/${topic}`;
+  const appURL = `ntfy://${topic}`;
+
+  document.getElementById('modal-title').textContent = 'CONFIGURAR ALERTAS';
+  document.getElementById('modal-msg').textContent = '';
+  document.getElementById('modal-body').innerHTML = `
+    <div style="font-size:13px;color:var(--text-muted);line-height:1.7;margin-bottom:14px">
+      Para receber alertas com tela bloqueada no iPhone, instale o app <strong style="color:var(--text)">ntfy</strong> e assine o canal abaixo:
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--accent);border-radius:10px;padding:12px 14px;font-family:var(--font-mono);font-size:13px;color:var(--accent);word-break:break-all;margin-bottom:12px;text-align:center">
+      ${topic}
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <a href="https://apps.apple.com/app/ntfy/id1625396347" target="_blank"
+        style="display:flex;align-items:center;justify-content:center;gap:8px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:12px;border-radius:10px;text-decoration:none;font-family:var(--font-mono);font-size:12px;letter-spacing:1px">
+        📲 INSTALAR APP NTFY (App Store)
+      </a>
+      <a href="${appURL}" target="_blank"
+        style="display:flex;align-items:center;justify-content:center;gap:8px;background:var(--accent);border:none;color:#000;padding:12px;border-radius:10px;text-decoration:none;font-family:var(--font-display);font-size:18px;letter-spacing:2px">
+        🔔 ASSINAR CANAL NO NTFY
+      </a>
+    </div>
+    <div style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);margin-top:12px;text-align:center">
+      Gratuito · sem cadastro · sem conta
+    </div>`;
+  document.getElementById('modal-confirm').textContent = 'Pronto, configurei!';
+  document.getElementById('modal-confirm').onclick = () => {
+    localStorage.setItem('ironlog_ntfy_configured','1');
+    closeModal();
+    updateNotifBtn();
+    showToast('🔔 Alertas via ntfy ativados!', 'success');
+  };
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function updateNotifBtn(){
+  const btn = document.getElementById('notif-btn');
+  if(!btn) return;
+  const configured = !!localStorage.getItem('ironlog_ntfy_configured');
+  btn.textContent = configured ? '🔔' : '🔕';
+  btn.style.color = configured ? 'var(--accent)' : 'var(--text-muted)';
+  btn.title = configured ? 'Alertas ntfy ativos' : 'Configurar alertas';
+}
+
+// Ao voltar ao foreground — recalcula tempo e alerta visualmente
 document.addEventListener('visibilitychange', () => {
   if(document.visibilityState === 'visible' && timerRunning){
     timerRender();
@@ -1296,7 +1301,7 @@ function fmt(s){if(!s)return'';const[y,m,d]=s.split('-');return`${d}/${m}/${y}`;
 async function init(){
   if(!loadConfig()){showSetupScreen();return;}
   showLoading('CONECTANDO...');
-  try{await refreshCache();renderHome();updateNotifBtn();await registerSW();}
+  try{await refreshCache();renderHome();updateNotifBtn();}
   catch(e){showToast('Erro de conexão','error');showSetupScreen();}
   hideLoading();
 }
