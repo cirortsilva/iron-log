@@ -1138,28 +1138,56 @@ function getNtfyTopic(){
 
 async function ntfySchedule(delaySeconds){
   const topic = getNtfyTopic();
+  const configured = !!localStorage.getItem('ironlog_ntfy_configured');
+  if(!configured) return; // só envia se o usuário confirmou a configuração
   try{
     const res = await fetch(`${NTFY_BASE}/${topic}`, {
       method:'POST',
       headers:{
         'Title':'IRON LOG — Descanso concluído!',
-        'X-Delay': String(Math.round(delaySeconds)),
+        'X-Delay': Math.round(delaySeconds) + 's',
         'X-Tags':'muscle,stopwatch',
         'X-Priority':'4',
       },
       body:'💪 2:30 encerrados. Hora da próxima série!'
     });
-    const data = await res.json().catch(()=>({}));
-    _ntfyPendingMsgId = data.id || null;
+    if(res.ok){
+      const data = await res.json().catch(()=>({}));
+      _ntfyPendingMsgId = data.id || null;
+    } else {
+      console.warn('ntfy schedule failed:', res.status);
+    }
   } catch(e){ console.warn('ntfy schedule error:', e); }
 }
 
-// ntfy.sh não suporta cancelamento, mas podemos "sobrescrever"
-// enviando uma notificação imediata vazia com a mesma tag.
-// Na prática, para timer de academia, a notificação extra é aceitável.
 function ntfyCancel(){
   _ntfyPendingMsgId = null;
-  // Sem cancelamento real — aceitável para este caso de uso
+  // ntfy.sh não suporta cancelamento — aceitável para timer de academia
+}
+
+async function ntfyTest(){
+  const topic = getNtfyTopic();
+  try{
+    const res = await fetch(`${NTFY_BASE}/${topic}`, {
+      method:'POST',
+      headers:{
+        'Title':'IRON LOG — Teste de alerta',
+        'X-Tags':'white_check_mark',
+        'X-Priority':'4',
+      },
+      body:'Configuração funcionando! Alertas ativos.'
+    });
+    if(res.ok){
+      showToast('Teste enviado! Verifique o ntfy.', 'success');
+    } else {
+      const err = await res.text();
+      showToast('Erro ntfy: ' + res.status, 'error');
+      console.warn('ntfy test error:', err);
+    }
+  } catch(e){
+    showToast('Falha na conexão com ntfy.sh', 'error');
+    console.warn('ntfy test fetch error:', e);
+  }
 }
 
 // ── AudioContext — som de fallback quando app está em foreground ──────────────
@@ -1258,6 +1286,11 @@ function requestAlertPermission(){
     </div>
     <div style="font-size:13px;color:var(--text-muted);line-height:1.7">
       <strong style="color:var(--text)">Passo 3</strong> — Permita notificações quando o ntfy pedir. Pronto!
+    </div>
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Após configurar, envie um teste:</div>
+      <button onclick="ntfyTest()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:12px;border-radius:10px;font-family:var(--font-mono);font-size:12px;letter-spacing:1px;cursor:pointer;text-transform:uppercase">▶ ENVIAR NOTIFICAÇÃO DE TESTE</button>
+      <div style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);margin-top:10px;line-height:1.6">Se não chegar: Ajustes do iPhone → Notificações → ntfy → ativar "Permitir Notificações"</div>
     </div>`;
   document.getElementById('modal-confirm').textContent = 'Pronto, configurei!';
   document.getElementById('modal-confirm').onclick = () => {
