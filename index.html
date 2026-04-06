@@ -1172,8 +1172,8 @@ async function ntfySchedule(delaySeconds){
   if(!localStorage.getItem('ironlog_ntfy_configured')) return;
   const id = await ntfySend({
     topic: getNtfyTopic(),
-    title: 'IRON LOG — Descanso concluído!',
-    message: '💪 2:30 encerrados. Hora da próxima série!',
+    title: 'Descanso concluído!',
+    message: '💪 2:30 encerrados. É hora do show porra! BIIRRRLLL',
     delay: Math.round(delaySeconds) + 's',
     tags: ['muscle'],
     priority: 4,
