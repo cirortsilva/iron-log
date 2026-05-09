@@ -27,6 +27,8 @@
   .header-status.loading{background:var(--orange);animation:pulse 1s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
   .btn-icon{background:var(--surface2);border:1px solid var(--border);color:var(--text);width:36px;height:36px;border-radius:8px;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+  #session-timer{display:none;align-items:center;gap:5px;font-family:var(--font-mono);font-size:13px;color:var(--accent);cursor:pointer;padding:4px 8px;border-radius:8px;background:rgba(200,255,0,.06);border:1px solid rgba(200,255,0,.2)}
+  #session-timer .st-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0;animation:pulse 2s infinite}
   .btn-icon:active{transform:scale(.93)}
 
   /* NAV */
@@ -299,6 +301,10 @@ CREATE POLICY "allow_all" ON sessions
 <!-- HEADER -->
 <header class="header">
   <div class="header-logo">IRON<span>LOG</span></div>
+  <div id="session-timer" onclick="returnToWorkout()" title="Treino em andamento">
+    <span class="st-dot"></span>
+    <span id="st-display">00:00</span>
+  </div>
   <div class="header-right">
     <div class="header-status" id="db-status" title="Status"></div>
     <button class="btn-icon" onclick="showSetupScreen()" title="Configurações">⚙</button>
@@ -339,7 +345,7 @@ CREATE POLICY "allow_all" ON sessions
 <!-- BOTTOM NAV -->
 <nav class="bottom-nav">
   <button class="nav-item active" onclick="switchView('home')" id="nav-home"><span class="nav-icon">🏠</span><span>Início</span></button>
-  <button class="nav-item" onclick="openTreinoSelector()" id="nav-treino"><span class="nav-icon">💪</span><span>Treino</span></button>
+  <button class="nav-item" onclick="handleTreinoNav()" id="nav-treino"><span class="nav-icon">💪</span><span>Treino</span></button>
   <button class="nav-item" onclick="switchView('history')" id="nav-history"><span class="nav-icon">📋</span><span>Histórico</span></button>
   <button class="nav-item" onclick="switchView('progress')" id="nav-progress"><span class="nav-icon">📈</span><span>Evolução</span></button>
 </nav>
@@ -439,6 +445,14 @@ const TREINOS = {
   ]}
 };
 const SCHEDULE={1:'A',2:'B',3:null,4:'C',5:'D',6:null,0:null};
+const GYMS=[
+  "Sam's Club",
+  "Carrefour",
+  "Maceió Shopping",
+  "Pátio Shopping",
+  "Grand Jardim",
+  "Palato",
+];
 const DAY_NAMES=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 
 // ══════════════════════════
@@ -522,7 +536,40 @@ async function connectSupabase(){
 // ══════════════════════════
 // STATE
 // ══════════════════════════
-let currentView='home',currentTreino=null,currentSessionData={},currentSessionDate='',historyFilter='ALL',editingSessionId=null;
+let currentView='home',currentTreino=null,currentSessionData={},currentSessionDate='',historyFilter='ALL',editingSessionId=null,currentGym='';
+
+// SESSION DURATION TIMER
+let _sessStart=null,_sessIv=null;
+function startSessionTimer(){
+  _sessStart=Date.now();
+  clearInterval(_sessIv);
+  _sessIv=setInterval(()=>{
+    if(!_sessStart)return;
+    const s=Math.floor((Date.now()-_sessStart)/1000);
+    const el=document.getElementById('st-display');
+    if(el)el.textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+  },1000);
+  document.getElementById('session-timer').style.display='flex';
+}
+function stopSessionTimer(){
+  clearInterval(_sessIv);_sessStart=null;
+  document.getElementById('session-timer').style.display='none';
+  const el=document.getElementById('st-display');if(el)el.textContent='00:00';
+}
+
+// TREINO NAV HANDLER
+function handleTreinoNav(){
+  if(currentTreino) returnToWorkout();
+  else openTreinoSelector();
+}
+function returnToWorkout(){
+  if(!currentTreino)return;
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));
+  document.getElementById('view-treino').classList.add('active');
+  document.getElementById('nav-treino').classList.add('active');
+  currentView='treino';
+}
 
 // ══════════════════════════
 // NAV
@@ -607,7 +654,7 @@ function renderHome(){
   const rec=document.getElementById('recent-sessions');
   const sessions=[...cache].reverse().slice(0,5);
   if(!sessions.length){rec.innerHTML=`<div class="empty-state"><div class="es-icon">🔑</div><p>NENHUM TREINO REGISTRADO AINDA</p></div>`;return;}
-  rec.innerHTML=`<div class="recent-list">${sessions.map(s=>`<div class="recent-card" onclick="viewSession('${s.id}')"><div><div class="recent-card-badge">TREINO ${s.treino}</div><div class="recent-card-date">${fmt(s.date)}</div><div class="recent-card-exs">${Object.keys(s.exercises||{}).length} exercício(s)</div></div><div class="recent-card-right">›</div></div>`).join('')}</div>`;
+  rec.innerHTML=`<div class="recent-list">${sessions.map(s=>`<div class="recent-card" onclick="viewSession('${s.id}')"><div><div class="recent-card-badge">TREINO ${s.treino}</div><div class="recent-card-date">${fmt(s.date)}</div><div class="recent-card-exs">${Object.keys(s.exercises||{}).length} exercício(s)${s.gym?' · 📍 '+s.gym:''}</div></div><div class="recent-card-right">›</div></div>`).join('')}</div>`;
 }
 
 // ══════════════════════════
@@ -621,8 +668,15 @@ function openTreinoSelector(){
       <input type="date" id="sel-date" value="${today}" max="${today}"
         style="width:100%;background:var(--surface2);border:1px solid var(--accent);color:var(--text);padding:13px;border-radius:10px;font-family:var(--font-mono);font-size:16px;outline:none">
     </div>
+    <div style="margin-bottom:14px">
+      <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:1px;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px">🏋️ Academia</div>
+      <select id="sel-gym" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:13px;border-radius:10px;font-family:var(--font-mono);font-size:15px;outline:none;-webkit-appearance:none;background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23666' d='M6 8L0 0h12z'/%3E%3C/svg%3E&quot;);background-repeat:no-repeat;background-position:right 14px center;padding-right:36px">
+        <option value="">— Selecione a unidade —</option>
+        ${GYMS.map(g=>`<option value="${g}"${localStorage.getItem('ironlog_last_gym')===g?' selected':''}>${g}</option>`).join('')}
+      </select>
+    </div>
     <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:1px;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px">Selecione o treino</div>
-    ${Object.entries(TREINOS).map(([k,t])=>`<button onclick="openTreino('${k}',document.getElementById('sel-date').value);closeSelectorModal()"
+    ${Object.entries(TREINOS).map(([k,t])=>`<button onclick="openTreino('${k}',document.getElementById('sel-date').value,document.getElementById('sel-gym').value);closeSelectorModal()"
       style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:14px 16px;border-radius:12px;font-family:var(--font-display);font-size:20px;letter-spacing:2px;cursor:pointer;text-align:left;margin-bottom:6px">
       <span style="color:var(--accent)">${k}</span> — <span style="font-size:13px;font-family:var(--font-body)">${t.sub}</span>
     </button>`).join('')}`;
@@ -630,10 +684,12 @@ function openTreinoSelector(){
 }
 function closeSelectorModal(){document.getElementById('selector-overlay').classList.remove('open');}
 
-function openTreino(key,date){
-  currentTreino=key;currentSessionData={};currentSessionDate=date||todayKey();
+function openTreino(key,date,gym){
+  currentTreino=key;currentSessionData={};currentSessionDate=date||todayKey();currentGym=gym||'';
+  if(gym) localStorage.setItem('ironlog_last_gym',gym);
   renderTreinoView();
   saveProgress();
+  startSessionTimer();
   switchView('treino');
   document.getElementById('nav-treino').classList.add('active');
 }
@@ -643,7 +699,8 @@ function renderTreinoView(){
   const prev=[...cache].reverse().find(s=>s.treino===currentTreino);
   const exHTML=t.exercises.map((ex,idx)=>{
     const ps=prev?.exercises?.[ex.id];
-    const prevHTML=ps?.length?`<div class="prev-record"><span>🏆</span><span class="prev-record-label">ÚLTIMA:</span><span>${ps.map(s=>s.noLoad?'S/carga×'+s.reps:`${s.load}kg×${s.reps}`).join(' · ')}</span></div>`:'';
+    const prevGym=prev?.gym||'';
+    const prevHTML=ps?.length?`<div class="prev-record"><span>🏆</span><span class="prev-record-label">ÚLTIMA${prevGym?' ('+prevGym+')':''}:</span><span>${ps.map(s=>s.noLoad?'S/carga×'+s.reps:`${s.load}kg×${s.reps}`).join(' · ')}</span></div>`:'';
     return `<div class="exercise-card" id="excard-${ex.id}">
       <div class="exercise-header" onclick="toggleExercise('${ex.id}')">
         <div class="exercise-num">${idx+1}</div>
@@ -669,6 +726,7 @@ function renderTreinoView(){
       <div class="treino-title-block">
         <div class="treino-badge">${t.name}</div>
         <div class="treino-subtitle">${t.sub}</div>
+        ${currentGym?`<div style="font-family:var(--font-mono);font-size:10px;color:var(--orange);letter-spacing:1px;margin-top:3px">📍 ${currentGym}</div>`:''}
       </div>
       <div class="treino-date-badge" onclick="document.getElementById('sd-inp').showPicker?document.getElementById('sd-inp').showPicker():document.getElementById('sd-inp').focus()">
         <div style="font-size:9px;color:var(--text-muted);font-family:var(--font-mono);letter-spacing:1px;margin-bottom:2px">📅 DATA</div>
@@ -760,12 +818,12 @@ async function saveTreino(){
   if(editingSessionId){
     // UPDATE existing session
     try{
-      await dbUpdate(editingSessionId, {exercises, date: currentSessionDate});
+      await dbUpdate(editingSessionId, {exercises, date: currentSessionDate, gym: currentGym});
       const cached = cache.find(s => s.id === editingSessionId);
       if(cached){ cached.exercises = exercises; cached.date = currentSessionDate; }
       showToast('✓ Treino atualizado!','success');
       editingSessionId = null;
-      clearProgress(); timerClose();
+      clearProgress(); timerClose(); stopSessionTimer();
       setTimeout(()=>switchView('history'),700);
     }catch(e){
       showToast('Erro: '+e.message,'error');
@@ -773,12 +831,12 @@ async function saveTreino(){
     }
   } else {
     // INSERT new session
-    const session={id:Date.now().toString(),date:currentSessionDate,treino:currentTreino,exercises};
+    const session={id:Date.now().toString(),date:currentSessionDate,treino:currentTreino,exercises,gym:currentGym};
     try{
       await dbInsert(session);
       cache.push(session);
       showToast('✓ Treino salvo!','success');
-      clearProgress();timerClose();
+      clearProgress();timerClose();stopSessionTimer();
       setTimeout(()=>switchView('home'),700);
     }catch(e){
       showToast('Erro: '+e.message,'error');
@@ -794,6 +852,7 @@ function editSession(id){
   editingSessionId = id;
   currentTreino = session.treino;
   currentSessionDate = session.date;
+  currentGym = session.gym || '';
   // Deep clone exercises so edits don't mutate cache directly
   currentSessionData = JSON.parse(JSON.stringify(session.exercises || {}));
   // Fill in any exercises from the plan that aren't in the session
@@ -812,11 +871,12 @@ function editSession(id){
   }
   const saveBtn = document.getElementById('save-btn');
   if(saveBtn){ saveBtn.classList.add('edit-mode'); saveBtn.textContent = '💾 SALVAR ALTERAÇÕES'; }
+  startSessionTimer();
   switchView('treino');
   document.getElementById('nav-treino').classList.add('active');
 }
 
-function confirmLeave(){const wasEditing=!!editingSessionId;showModal('Sair do treino?','O progresso não salvo será perdido.',()=>{clearProgress();timerClose();editingSessionId=null;switchView(wasEditing?'history':'home');});}
+function confirmLeave(){const wasEditing=!!editingSessionId;showModal('Sair do treino?','O progresso não salvo será perdido.',()=>{clearProgress();timerClose();stopSessionTimer();currentTreino=null;editingSessionId=null;switchView(wasEditing?'history':'home');});}
 
 // ══════════════════════════
 // HISTORY
@@ -838,7 +898,7 @@ function renderHistory(){
     return `<div class="session-card" id="sc-${s.id}">
       <div class="session-card-header" onclick="toggleSC('${s.id}')">
         <div class="sc-badge">${s.treino}</div>
-        <div class="sc-info"><div class="sc-date">${fmt(s.date)}</div><div class="sc-summary">${exCount} exerc. · ${total} séries</div></div>
+        <div class="sc-info"><div class="sc-date">${fmt(s.date)}${s.gym?' · 📍 '+s.gym:''}</div><div class="sc-summary">${exCount} exerc. · ${total} séries</div></div>
         <div class="sc-actions">
           <button class="sc-del edit-btn" onclick="event.stopPropagation();editSession('${s.id}')" title="Editar treino">✏️</button>
           <button class="sc-del" onclick="event.stopPropagation();editDate('${s.id}','${s.date}')" title="Editar data">📅</button>
@@ -960,7 +1020,8 @@ function saveProgress(){
   localStorage.setItem(WIP_KEY, JSON.stringify({
     treino: currentTreino,
     date: currentSessionDate,
-    data: currentSessionData
+    data: currentSessionData,
+    gym: currentGym
   }));
 }
 
@@ -991,11 +1052,13 @@ function resumeWorkout(){
   currentTreino = wip.treino;
   currentSessionDate = wip.date;
   currentSessionData = wip.data;
+  currentGym = wip.gym || '';
   renderTreinoView();
   // Re-render all saved sets
   Object.keys(currentSessionData).forEach(id => {
     if(currentSessionData[id].length) renderSets(id);
   });
+  startSessionTimer();
   switchView('treino');
   document.getElementById('nav-treino').classList.add('active');
   showToast('✓ Treino restaurado!', 'success');
@@ -1137,34 +1200,52 @@ function getNtfyTopic(){
 }
 
 async function ntfySend(payload, showErrors=false){
-  const ctrl = new AbortController();
-  const timeout = setTimeout(()=>ctrl.abort(), 8000);
+  const topic = payload.topic || getNtfyTopic();
+  const { topic: _t, ...rest } = payload;
+
+  // ── Tentativa 1: JSON com CORS ──────────────────────────
+  const ctrl1 = new AbortController();
+  const t1 = setTimeout(()=>ctrl1.abort(), 8000);
   try{
-    const res = await fetch(`${NTFY_BASE}`, {
-      method: 'POST',
-      signal: ctrl.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+    const res = await fetch(`https://ntfy.sh/${topic}`, {
+      method:'POST', signal:ctrl1.signal,
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(rest),
     });
-    clearTimeout(timeout);
+    clearTimeout(t1);
     if(res.ok){
-      const data = await res.json().catch(()=>({}));
-      return data.id || null;
-    } else {
-      const txt = await res.text().catch(()=>'');
-      if(showErrors) showToast('Erro ntfy: ' + res.status, 'error');
-      console.warn('ntfy error', res.status, txt);
+      if(showErrors) showToast('✓ Enviado! Verifique o ntfy.','success');
+      return (await res.json().catch(()=>({}))).id || 'ok';
+    }
+    if(showErrors) showToast('Erro ntfy.sh: '+res.status,'error');
+    return null;
+  } catch(e1){
+    clearTimeout(t1);
+    console.warn('ntfy método 1 falhou:',e1.name, e1.message);
+
+    // ── Tentativa 2: no-cors (contorna ITP do Safari) ─────
+    // Perde a resposta mas a requisição passa mesmo assim
+    try{
+      await fetch(`https://ntfy.sh/${topic}`, {
+        method:'POST',
+        mode:'no-cors',
+        headers:{'Content-Type':'text/plain'},
+        body: rest.message || 'IRON LOG: descanso concluído',
+      });
+      // Com no-cors não conseguimos ler a resposta, mas o fetch não lançou exceção = enviado
+      if(showErrors) showToast('✓ Enviado! Verifique o ntfy.','success');
+      return 'sent-nocors';
+    } catch(e2){
+      console.warn('ntfy método 2 falhou:',e2.name, e2.message);
+      if(showErrors){
+        if(e1.name==='AbortError'){
+          showToast('Timeout — ntfy.sh está inacessível agora','error');
+        } else {
+          showToast('Erro ('+e1.name+'): abra ntfy.sh no Safari e tente de novo','error');
+        }
+      }
       return null;
     }
-  } catch(e){
-    clearTimeout(timeout);
-    if(e.name === 'AbortError'){
-      if(showErrors) showToast('ntfy.sh sem resposta (timeout)', 'error');
-    } else {
-      if(showErrors) showToast('Sem conexão com ntfy.sh', 'error');
-    }
-    console.warn('ntfy fetch error:', e);
-    return null;
   }
 }
 
@@ -1172,12 +1253,12 @@ async function ntfySchedule(delaySeconds){
   if(!localStorage.getItem('ironlog_ntfy_configured')) return;
   const id = await ntfySend({
     topic: getNtfyTopic(),
-    title: 'Descanso concluído!',
-    message: '💪 2:30 encerrados. É hora do show porra! BIIRRRLLL',
+    title: 'IRON LOG — Descanso concluído!',
+    message: '💪 2:30 encerrados. Hora da próxima série!',
     delay: Math.round(delaySeconds) + 's',
     tags: ['muscle'],
     priority: 4,
-  });
+  }, false);
   _ntfyPendingMsgId = id;
 }
 
